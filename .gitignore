@@ -1,0 +1,32 @@
+# --- credentials / signing (never commit) -----------------------------------
+keystore.properties
+*.keystore
+*.jks
+local.properties
+
+# Exported skills contain live login sessions
+*.skill
+**/auth/*.json
+!**/auth/.gitkeep
+
+# --- Android ----------------------------------------------------------------
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/.idea/
+*.iml
+
+# The web bundle is a build artifact; build it with `npm run build`
+android/app/src/main/assets/www/
+
+# --- Node / web -------------------------------------------------------------
+web/node_modules/
+web/dist/
+npm-debug.log*
+yarn-error.log*
+
+# --- misc -------------------------------------------------------------------
+__pycache__/
+*.pyc
+.DS_Store

@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: #191817;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+* { -webkit-user-select: none; user-select: none; }
+input { -webkit-user-select: text; user-select: text; }

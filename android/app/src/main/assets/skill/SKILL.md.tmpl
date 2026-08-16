@@ -1,0 +1,261 @@
+---
+name: {{NAME}}
+description: 会員限定・パスワード保護のFAマニュアルサイト（{{SITE_NAMES}}）に、保存済みの認証情報でアクセスして中身を読む。三菱電機FA・オムロン・キーエンス・JTEKTのマニュアル、取扱説明書、技術資料、型式仕様、PLCやロボットのドキュメントについて質問された場合、通常のweb_fetchがログイン画面やパスワード画面に飛ばされる場合、会員限定PDFの中身が必要な場合に使用する。
+version: {{VERSION}}
+---
+
+# Industrial Auth Skill
+
+会員限定・パスワード保護のFAマニュアルサイトを、保存済みの認証情報で開く。
+
+## 最初にやること
+
+このSkillのディレクトリに移動してから実行する。以下の説明の
+`scripts/fetch.py` は、すべてSkillルートからの相対パス。
+
+必要なPythonパッケージ（未導入なら先に入れる）:
+
+```bash
+pip install requests beautifulsoup4
+```
+
+`requests` が無いと動かない。`beautifulsoup4` が無い場合は動くが、
+HTMLがタグごと出力されて読みにくくなる。
+
+## 収録サイト
+
+{{SITE_TABLE}}
+
+`tier` は必要な取得手段。
+
+| tier | 意味 | 使うもの |
+| --- | --- | --- |
+| `cookie` | Cookieを付ければ素の HTTP で取れる | `scripts/fetch.py` |
+| `render` | 中身がJSで後から入ることがある | まず素で試し、駄目なら `--render` |
+| `api` | 一覧がJS描画。裏のJSON APIを直接叩く | `scripts/fetch.py --family <ID>` |
+| `password` | 利用者が設定した共有パスワードで関門を通す | `scripts/fetch.py`（自動でPOST） |
+
+キーエンスのPDFは URL 直取得ではなく `--asset` を使う（下記参照）。
+
+## 基本の使い方
+
+```bash
+# HTMLをテキストとして読む
+python scripts/fetch.py --site <site> --url "<URL>"
+
+# ページ内のリンクURLを列挙する（PDFを探すときはこれ）
+python scripts/fetch.py --site <site> --url "<URL>" --links '\.pdf$'
+
+# PDFを取る（PDFは --out 必須。省略するとエラーになる）
+python scripts/fetch.py --site <site> --url "<PDF URL>" --out manual.pdf
+
+# 出力が短い/中身が空のとき（JS描画待ち）
+python scripts/fetch.py --site <site> --url "<URL>" --render
+
+# オムロン専用: 製品ファミリの資料一覧をJSON APIから取得
+python scripts/fetch.py --site omron --family <製品ファミリID>
+```
+
+**重要**: 本文表示はHTMLタグを落とすため、リンクURLは出力に現れない。
+PDFのURLを知りたいときは必ず `--links` を使うこと。`--links` に正規表現を
+渡すと絞り込める（省略すると全リンク）。
+
+`--render` は Playwright を使う。未導入なら `pip install playwright &&
+playwright install chromium` が要るが数百MBかかるので、**まず `--render`
+無しで試すこと**。素で十分読めることが多い。
+
+PDFを取得したら、その後は通常のPDF読み取り手段で中身を読む。
+
+## まずは検索（全製品対応）
+
+**製品を問わずマニュアルを探すときは `--search` を使う。** PLCに限らず、
+サーボ・インバータ・表示器・センサ・ロボットなど各社の全製品が対象。
+
+```bash
+python scripts/fetch.py --site mitsubishi --search "MR-J5"
+python scripts/fetch.py --site omron      --search "NX1P2"
+python scripts/fetch.py --site keyence    --search "KV-8000"
+python scripts/fetch.py --site jtekt      --search "イーサネット"
+```
+
+各社の挙動:
+
+| site | 仕組み | 補足 |
+| --- | --- | --- |
+| `mitsubishi` | 横断検索のマニュアル欄と同じエンドポイント | 資料ごとに日英中韓の版が並ぶ |
+| `omron` | キーワード→製品ファミリID→資料APIの2段 | `--max-families` で探索数を調整（既定10） |
+| `keyence` | 全55シリーズのサポートページを巡回して絞り込み | 時間がかかる。`--category` で絞ると速い |
+| `jtekt` | 製品分類ごとの検索スクリプト | 既定で plc/motion/hmi を横断。`--category` で単一指定 |
+
+キーワードは**短く単純**にすること。"MELSERVO MR-J5" のような複合語は
+サイト側が0件を返す。型式や製品名を単体で渡す。
+
+検索で出たPDF URLは、そのまま `--out` で取得できる。
+
+```bash
+python scripts/fetch.py --site mitsubishi --out manual.pdf \
+  --url "https://dl.mitsubishielectric.co.jp/dl/fa/members/document/manual/servo/sh030293/sh030293p.pdf"
+```
+
+## サイト別の探し方
+
+`--search` で見つからないとき、または特定製品の資料を網羅したいときに使う。
+
+探し方が分かっているものは以下。いずれも「一覧を取る → 目的のPDF URLを
+見つける → `--out` で取る」の2段構え。
+
+### 三菱電機FA（`mitsubishi`）
+
+検索ページ自体は認証不要で読める。検索結果の中に会員限定PDFへの直リンク
+（`https://dl.mitsubishielectric.co.jp/dl/fa/members/...pdf`）が含まれるので、
+そこから拾って取得する。
+
+```bash
+# 1) 検索結果から会員限定PDFのURLを列挙（例: GX Works3）
+python scripts/fetch.py --site mitsubishi --links '\.pdf$' \
+  --url "https://www.mitsubishielectric.co.jp/fa/download/search.do?mode=keymanual&q=GX+Works3&lang=1&sort=0"
+
+# 2) 見つけた members PDF を取得
+python scripts/fetch.py --site mitsubishi \
+  --url "https://dl.mitsubishielectric.co.jp/dl/fa/members/document/manual/plc/sh081214/sh081214as.pdf" \
+  --out gxworks3.pdf
+
+# 何のマニュアルか題名で確かめたいときは本文も読む
+python scripts/fetch.py --site mitsubishi \
+  --url "https://www.mitsubishielectric.co.jp/fa/download/search.do?mode=keymanual&q=GX+Works3&lang=1&sort=0"
+```
+
+`q=` を変えれば他の製品も検索できる。
+
+### JTEKT（`jtekt`）
+
+一覧はログイン不要で読める。PDFは
+`https://toyoda.jtekt.co.jp/data/Tp/Torisetu/*.pdf` の形式で、
+アクセス時のパスワード関門は自動で通過する。
+
+```bash
+# 一覧の本文（機種名・型式）を読む
+python scripts/fetch.py --site jtekt \
+  --url "https://toyoda.jtekt.co.jp/support/OfcTpTorisetuList.php?gengo=1&searchBtn=%E6%A4%9C%E7%B4%A2"
+
+# PDFのURLを列挙する
+python scripts/fetch.py --site jtekt --links 'Torisetu.*\.pdf' \
+  --url "https://toyoda.jtekt.co.jp/support/OfcTpTorisetuList.php?gengo=1&searchBtn=%E6%A4%9C%E7%B4%A2"
+```
+
+### オムロン（`omron`）
+
+**`--links` も `--render` も効かない。`--family` を使うこと。**
+資料一覧はJSで描画されるためHTMLには出ず、ヘッドレスブラウザはWAFに
+403で弾かれる。代わりにページと同じJSON APIを直接叩く。
+
+手順は「製品ファミリIDを調べる → `--family` で資料一覧 → URLを `--out` で取得」。
+ファミリIDは製品ページURL `https://www.fa.omron.co.jp/products/family/<ID>/`
+の `<ID>`（例: Sysmac Studio = 3077）。IDが不明なら、まず製品ページを
+`--url` で開いて確認するか、ユーザーに製品ページURLを尋ねる。
+
+```bash
+# 1) 資料一覧（カタログ番号・種別・サイズ・PDF URL が出る）
+python scripts/fetch.py --site omron --family 3077
+
+# 2) 出てきたURLを取得
+python scripts/fetch.py --site omron \
+  --url "https://www.fa.omron.co.jp/data_pdf/mnu/sbca-470am_sysmac-se2___.pdf?id=3077" \
+  --out sysmac.pdf
+```
+
+既定では日本語資料のみ表示する。英語も含めるなら `--lang ""` を付ける。
+
+なお `/download/manuals/` の全文検索は未ログイン扱いで0件になり使えない。
+必ず製品ファミリ経由で辿ること。
+
+### キーエンス（`keyence`）
+
+**一覧・取得のどちらもログインが必要。セッションは短命（実測で25分程度）**なので、
+書き出した直後に使うこと。
+
+> **空の結果が返ったら、まずセッション切れを疑う。**
+> 「その製品は非対応」と判断してはいけない。一覧が0件・空に見える原因は
+> ほぼ失効であり、製品側の問題ではない。`--cards` が空なら
+> `https://www.keyence.co.jp/mypage/` を `--url` で開いて「ログアウト」の
+> 文字があるか確認する。無ければ失効。
+
+導線は `商品別ユーザーサポート → カテゴリ/シリーズ → マニュアル`。
+
+```bash
+# 1) シリーズ一覧（55カテゴリのURLが出る）
+python scripts/fetch.py --site keyence --links '/support/user/' \
+  --url "https://www.keyence.co.jp/support/user/"
+
+# 2) そのシリーズの資料一覧（資料名とダウンロードURLが出る）
+python scripts/fetch.py --site keyence --cards \
+  --url "https://www.keyence.co.jp/support/user/controls/plc/manual/building/"
+```
+
+URLは **`/support/user/<カテゴリ>/<シリーズ>/manual/`** の形で統一されている。
+PLCに限らずセンサ・画像処理・コードリーダ・ソフトウェアまで同じ規則。
+
+| 製品 | URL |
+| --- | --- |
+| KVシリーズPLC | `controls/plc/manual/building/` |
+| KV STUDIO / KV-X | `controls/kv-x/manual/` |
+| IXシリーズ（レーザ変位センサ） | `sensor/ix/manual/` |
+| IV3シリーズ（画像センサ） | `vision/iv3/manual/` |
+| SR-Xシリーズ（コードリーダ） | `barcode/sr-x/manual/` |
+
+商品ページ側の `/products/.../downloads/?mode=ma` は資料一覧がAJAXで描画され
+HTMLに出ないため**使わない**。同じ資料が必ず `/support/user/` 側にある。
+
+`--cards` はページの2種類のテンプレート（新: `supportCards` 埋め込み、
+旧: `dlAssetId` 直リンク）を自動で見分ける。既定は日本語のみ、全件は `--lang ""`。
+
+`--cards` で出た `AS_xxxxx` を `--asset` に渡すとPDFを取得できる（**ログイン必須**）。
+
+```bash
+python scripts/fetch.py --site keyence --asset AS_166466 --out kv8000.pdf
+```
+
+`--out` を省略するとサーバが返すファイル名で保存する。
+
+内部では確認画面 → `/mykeyence/` へPOST → `downloadFromDLList` の3段を辿る。
+確認画面に出る「さらに詳しく知りたい方へ」のアンケートはダウンロードとは
+無関係な営業向け項目なので、**送信してはいけない**。
+
+セッションが切れているとメールアドレス入力画面が返り `AUTH_EXPIRED` になる。
+その場合はユーザーに再取得を依頼すること。
+
+## 認証が切れているとき
+
+出力が `AUTH_EXPIRED` で終わったら、そのサイトの認証は失効している。
+**自分で復旧はできない。ID・パスワードをユーザーに尋ねてはいけない。**
+
+- `cookie` / `render` tier：ユーザーに「**I-A-スキルクリエータ**（Androidアプリ）で
+  対象サイトのログインを取り直し、Skillを書き出し直してほしい」と伝える。
+- `password` tier：共有パスワードが変更された可能性がある。ユーザーに最新の
+  共有パスワードを確認してもらい、**I-A-スキルクリエータ**アプリで入力し直して
+  Skillを書き出すか、`auth/<site>.pw.json` の `password` を直接更新するよう案内する。
+
+`auth/*.json` の `expiresAt` は取得から30日を機械的に入れているだけで、
+**実際の寿命はサイトごとに違う**。とくにキーエンスは**実測25分程度**で切れる。
+`expiresAt` が先でも失効していることがあるので、残り日数は信用しないこと。
+
+失効しても動く（認証不要のため）:
+
+- 三菱の検索結果一覧（`--search` / `--links`）
+- JTEKTの一覧とPDF（共有パスワードのみで完結）
+
+失効すると動かない:
+
+- 三菱の会員限定PDF
+- オムロンの `--family` とPDF
+- **キーエンスは一覧（`--cards` / `--search`）もPDF（`--asset`）も動かない**
+
+とくにキーエンスは、失効時にエラーではなく**空の一覧**が返る。
+0件を製品側の非対応と誤認しないこと。
+
+## 注意
+
+- `auth/` の中身は生の認証情報。ログ・出力・コミット・ユーザーへの表示に
+  含めないこと。Cookieの値を画面に出す必要は一切ない。
+- 取得したマニュアルは、ユーザーの質問に答えるために使う。長文をそのまま
+  複製せず、必要な箇所を要約して答えること。
